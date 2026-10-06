@@ -20,6 +20,8 @@ max_streams  = 64
 # Empty disables it.
 [admin]
 listen = "127.0.0.1:9600"
+# Set a strong random token to enable GET/PUT /clients for 3x-ui.
+# token = "replace-with-a-random-management-token"
 # listen = "/run/tgwebproxy/admin.sock"
 
 # Static cover site. Point it at something you would plausibly host.
@@ -30,6 +32,9 @@ site = ""
 [[secret]]
 value = "000102030405060708090a0b0c0d0e0f"
 label = "phone"
+# disabled = false
+# expires_unix = 0
+# quota_bytes = 0
 
 [[secret]]
 value = "0f0e0d0c0b0a09080706050403020100"
