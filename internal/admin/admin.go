@@ -98,7 +98,7 @@ func NewManagedPersistent(listen string, registry *metrics.Registry, ready Ready
 	return &Server{
 		network: network,
 		address: address,
-		flush: flush,
+		flush:   flush,
 		http: &http.Server{
 			Addr:              address,
 			Handler:           mux,
