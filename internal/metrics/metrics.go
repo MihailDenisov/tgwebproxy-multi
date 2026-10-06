@@ -76,6 +76,18 @@ func (r *Registry) Add(name string, delta int64, labels ...string) {
 	r.lookup(name, labels).value.Add(delta)
 }
 
+// Value returns the current value of one exact series.
+func (r *Registry) Value(name string, labels ...string) int64 {
+	key := name + "\x00" + strings.Join(labels, "\x00")
+	r.mu.RLock()
+	found := r.seen[key]
+	r.mu.RUnlock()
+	if found == nil {
+		return 0
+	}
+	return found.value.Load()
+}
+
 func (r *Registry) lookup(name string, labels []string) *series {
 	key := name + "\x00" + strings.Join(labels, "\x00")
 
