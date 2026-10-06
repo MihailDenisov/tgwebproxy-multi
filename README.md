@@ -91,7 +91,10 @@ label = "laptop"
 ```
 
 Each client gets its own secret, so one can be revoked without disturbing the
-others, and logs name the client rather than the address.
+others, and logs name the client rather than the address. Client blocks also
+accept `disabled`, `expires_unix` and `quota_bytes`. Disabled or expired
+clients cannot authenticate; a quota is counted as upload + download bytes and
+an active session is closed when the limit is reached.
 [relay.example.toml](relay.example.toml) lists every setting. `-config` cannot
 be combined with `-domain` or `-secret`: the file is either the source of truth
 or it is not used at all.
@@ -153,6 +156,15 @@ docker run -d --name tgwebproxy -p 80:80 -p 443:443 -v certs:/certs \
 Keep the `/certs` volume, or every restart asks Let's Encrypt for a new
 certificate and hits its rate limit.
 
+### MAIN + HTTPS edge
+
+For a censored edge, keep `tgwebproxy` on the MAIN host and expose it only on
+loopback with `behind_proxy = true`. A separate edge VPS can terminate
+`web.example.com` and reverse-proxy ordinary HTTPS/WebSocket traffic to MAIN
+over TLS. Preserve the original HTTP `Host` because WEB capabilities are bound
+to the public hostname. The edge does not need client secrets and does not
+connect to Telegram directly.
+
 ### Behind nginx
 
 When something else already owns port 443, let it terminate TLS and proxy to
@@ -192,6 +204,7 @@ the previous result; a gap is refused outright.
 ```toml
 [admin]
 listen = "127.0.0.1:9600"
+# token = "strong-random-token" # enables the private 3x-ui client API
 ```
 
 `/healthz` says the process is alive, `/readyz` opens and drops a TCP
@@ -209,9 +222,23 @@ tgwp_gate_rejections_total{domain="files.example.com"} 431
 ```
 
 Because every series carries the secret's label, traffic is attributed per
-client, which is what makes handing out access with a bot practical: issue a
-labelled secret, watch what it uses, remove the line and `SIGHUP` when the
-subscription ends.
+client.
+
+When `[admin].token` is set, the same private listener also exposes a
+bearer-protected management endpoint for 3x-ui:
+
+```text
+GET /clients
+PUT /clients
+Authorization: Bearer <token>
+```
+
+`PUT /clients` is desired-state sync for one configured domain: it atomically
+replaces that domain's client list with `name`, `secret`, `enabled`,
+`expires_unix` and `quota_bytes`. Removed, disabled or expired clients lose
+their live sessions. `GET /clients` returns the active policy plus per-client
+upload/download and live session/stream counters. The endpoint is never
+registered on the public listener.
 
 The listener must be private — a loopback `host:port`, or a filesystem path
 taken as a Unix socket. Anything routable is refused at start-up, and a test
