@@ -73,7 +73,7 @@ type Config struct {
 	// AdminListen serves health and metrics. Empty disables it.
 	AdminListen string
 	// AdminToken enables the private 3x-ui client management endpoints.
-	AdminToken     string
+	AdminToken string
 	// AdminStateFile persists managed clients across restarts.
 	AdminStateFile string
 }
