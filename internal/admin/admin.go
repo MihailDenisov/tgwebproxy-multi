@@ -7,6 +7,8 @@ package admin
 
 import (
 	"context"
+	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -15,7 +17,9 @@ import (
 	"strings"
 	"time"
 
+	"tgwebproxy/internal/httpfront"
 	"tgwebproxy/internal/metrics"
+	"tgwebproxy/internal/secret"
 )
 
 // ReadyFunc reports whether the relay can currently reach Telegram.
@@ -35,6 +39,18 @@ type Server struct {
 // process bound to the container's own loopback, so a bind-mounted socket is
 // the only way to keep the listener private and still reach it from the host.
 func New(listen string, registry *metrics.Registry, ready ReadyFunc) (*Server, error) {
+	return NewManaged(listen, registry, ready, nil, "")
+}
+
+// ClientManager is implemented by the public handler. The admin server uses it
+// only on the private listener; the public WEB endpoint never exposes these APIs.
+type ClientManager interface {
+	ClientSnapshot() []httpfront.ClientDomain
+	ReplaceClients(domain string, entries []secret.Entry) error
+}
+
+// NewManaged enables the 3x-ui management API when both manager and token are set.
+func NewManaged(listen string, registry *metrics.Registry, ready ReadyFunc, manager ClientManager, token string) (*Server, error) {
 	network, address, err := parseListen(listen)
 	if err != nil {
 		return nil, err
@@ -60,6 +76,9 @@ func New(listen string, registry *metrics.Registry, ready ReadyFunc) (*Server, e
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		registry.WriteTo(w)
 	})
+	if manager != nil && token != "" {
+		mux.HandleFunc("/clients", managedClients(manager, registry, token))
+	}
 
 	return &Server{
 		network: network,
@@ -70,6 +89,112 @@ func New(listen string, registry *metrics.Registry, ready ReadyFunc) (*Server, e
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 	}, nil
+}
+
+type managedClient struct {
+	Name        string `json:"name"`
+	Secret      string `json:"secret,omitempty"`
+	Enabled     bool   `json:"enabled"`
+	ExpiresUnix int64  `json:"expires_unix,omitempty"`
+	QuotaBytes  int64  `json:"quota_bytes,omitempty"`
+	BytesUp     int64  `json:"bytes_up,omitempty"`
+	BytesDown   int64  `json:"bytes_down,omitempty"`
+	Sessions    int64  `json:"sessions_active,omitempty"`
+	Streams     int64  `json:"streams_active,omitempty"`
+}
+
+type clientsPayload struct {
+	Domain  string          `json:"domain"`
+	Clients []managedClient `json:"clients"`
+}
+
+func managedClients(manager ClientManager, registry *metrics.Registry, token string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(r, token) {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			var out []clientsPayload
+			for _, domain := range manager.ClientSnapshot() {
+				item := clientsPayload{Domain: domain.Domain}
+				for _, entry := range domain.Entries {
+					labels := []string{"domain", domain.Domain, "label", entry.Label}
+					item.Clients = append(item.Clients, managedClient{
+						Name: entry.Label, Secret: entry.Secret.Hex(), Enabled: !entry.Disabled,
+						ExpiresUnix: entry.ExpiresUnix, QuotaBytes: entry.QuotaBytes,
+						BytesUp: registry.Sum("tgwp_bytes_up_total", labels...),
+						BytesDown: registry.Sum("tgwp_bytes_down_total", labels...),
+						Sessions: registry.Sum("tgwp_sessions_active", labels...),
+						Streams: registry.Sum("tgwp_streams_active", labels...),
+					})
+				}
+				out = append(out, item)
+			}
+			writeJSON(w, http.StatusOK, out)
+		case http.MethodPut:
+			var input clientsPayload
+			dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&input); err != nil {
+				http.Error(w, "invalid json", http.StatusBadRequest)
+				return
+			}
+			if input.Domain == "" || len(input.Clients) == 0 {
+				http.Error(w, "domain and at least one client are required", http.StatusBadRequest)
+				return
+			}
+			entries := make([]secret.Entry, 0, len(input.Clients))
+			seen := map[string]struct{}{}
+			for _, client := range input.Clients {
+				name := strings.TrimSpace(client.Name)
+				if name == "" {
+					http.Error(w, "client name is required", http.StatusBadRequest)
+					return
+				}
+				if _, exists := seen[name]; exists {
+					http.Error(w, "duplicate client name", http.StatusBadRequest)
+					return
+				}
+				seen[name] = struct{}{}
+				sec, err := secret.Parse(client.Secret)
+				if err != nil || client.ExpiresUnix < 0 || client.QuotaBytes < 0 {
+					http.Error(w, "invalid client policy", http.StatusBadRequest)
+					return
+				}
+				entries = append(entries, secret.Entry{
+					Secret: sec, Label: name, Disabled: !client.Enabled,
+					ExpiresUnix: client.ExpiresUnix, QuotaBytes: client.QuotaBytes,
+				})
+			}
+			if err := manager.ReplaceClients(input.Domain, entries); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		default:
+			w.Header().Set("Allow", "GET, PUT")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func authorized(r *http.Request, token string) bool {
+	const prefix = "Bearer "
+	value := r.Header.Get("Authorization")
+	if !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	got := strings.TrimPrefix(value, prefix)
+	return subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
 }
 
 // parseListen decides between a Unix socket and a loopback TCP address.
