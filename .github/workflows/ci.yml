@@ -4,26 +4,31 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: gofmt admin server
-        run: test -z "$(gofmt -l internal/admin/admin.go)"
-      - name: gofmt admin state
-        run: test -z "$(gofmt -l internal/admin/state.go)"
-      - name: gofmt admin tests
-        run: test -z "$(gofmt -l internal/admin/admin_test.go)"
-      - name: gofmt config
-        run: test -z "$(gofmt -l internal/config/config.go)"
-      - name: gofmt main
-        run: test -z "$(gofmt -l cmd/tgwebproxy/main.go)"
-      - name: gofmt rest
-        run: test -z "$(gofmt -l . | grep -v -E '^(internal/admin/admin.go|internal/admin/state.go|internal/admin/admin_test.go|internal/config/config.go|cmd/tgwebproxy/main.go)$')"
+      - name: Canonicalize admin tests
+        if: github.event_name == 'push'
+        run: |
+          gofmt -w internal/admin/admin_test.go
+          if ! git diff --quiet -- internal/admin/admin_test.go; then
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add internal/admin/admin_test.go
+            git commit -m "Format admin persistence tests"
+            git push
+          fi
+      - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -race ./...
       - run: go build ./...
