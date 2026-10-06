@@ -4,30 +4,14 @@ on:
   push:
   pull_request:
 
-permissions:
-  contents: write
-
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Canonicalize admin tests
-        if: github.event_name == 'push'
-        run: |
-          gofmt -w internal/admin/admin_test.go
-          if ! git diff --quiet -- internal/admin/admin_test.go; then
-            git config user.name github-actions[bot]
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add internal/admin/admin_test.go
-            git commit -m "Format admin persistence tests"
-            git push
-          fi
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -race ./...
