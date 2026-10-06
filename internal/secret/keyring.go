@@ -4,13 +4,24 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Entry is one configured secret and the name an operator gave it. The label
 // is for logs and metrics; it is not a credential.
 type Entry struct {
-	Secret Secret
-	Label  string
+	Secret      Secret
+	Label       string
+	Disabled    bool
+	ExpiresUnix int64
+	QuotaBytes  int64
+}
+
+func (e Entry) Active(now time.Time) bool {
+	if e.Disabled {
+		return false
+	}
+	return e.ExpiresUnix <= 0 || now.Unix() < e.ExpiresUnix
 }
 
 // Keyring matches a supplied bridge capability against every configured
@@ -62,14 +73,18 @@ func (k *Keyring) Match(provided string) (Entry, bool) {
 	if found != 1 {
 		return Entry{}, false
 	}
-	return k.entries[index], true
+	entry := k.entries[index]
+	if !entry.Active(time.Now()) {
+		return Entry{}, false
+	}
+	return entry, true
 }
 
 // Contains reports membership by secret, ignoring the label: renaming an entry
 // across a reload must not look like revoking it.
 func (k *Keyring) Contains(e Entry) bool {
 	for _, existing := range k.entries {
-		if existing.Secret.Equal(e.Secret) {
+		if existing.Secret.Equal(e.Secret) && existing.Active(time.Now()) {
 			return true
 		}
 	}
