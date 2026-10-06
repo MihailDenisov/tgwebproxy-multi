@@ -110,7 +110,7 @@ func run() error {
 	defer stop()
 
 	if cfg.AdminListen != "" {
-		adminServer, err := admin.New(cfg.AdminListen, registry, reachTelegram)
+		adminServer, err := admin.NewManaged(cfg.AdminListen, registry, reachTelegram, handler, cfg.AdminToken)
 		if err != nil {
 			return err
 		}
