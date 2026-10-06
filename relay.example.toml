@@ -1,0 +1,63 @@
+# Copy to relay.toml and edit. Reload after changes with:
+#   docker kill -s HUP tgwebproxy      (or: kill -HUP <pid>)
+#
+# Reloadable: the secrets and cover site of each domain, max_streams and
+# log_level. A restart is needed to add or remove a domain and to change
+# listen, plain_listen, cert_dir or behind_proxy — the set of names is fixed by
+# the ACME host policy, and the listeners are already bound.
+
+domain       = "proxy.example.com"
+listen       = ":443"
+plain_listen = ":80"
+cert_dir     = "certs"
+log_level    = "info"
+max_streams  = 64
+
+# Health and metrics. Either a loopback host:port or a path, which is taken as
+# a Unix socket; anything routable is refused, because an endpoint on the
+# public port would be a fingerprint that undoes the capability gate. In Docker
+# use the socket: a published port cannot reach a container's own loopback.
+# Empty disables it.
+[admin]
+listen = "127.0.0.1:9600"
+# listen = "/run/tgwebproxy/admin.sock"
+
+# Static cover site. Point it at something you would plausibly host.
+site = ""
+
+# One block per client. The label appears in logs; it is not a credential.
+# Generate a secret with: openssl rand -hex 16
+[[secret]]
+value = "000102030405060708090a0b0c0d0e0f"
+label = "phone"
+
+[[secret]]
+value = "0f0e0d0c0b0a09080706050403020100"
+label = "laptop"
+
+# --- Several domains -------------------------------------------------------
+#
+# One process can serve any number of names, each with its own secrets and its
+# own cover site. That is the cheapest answer to a domain being blocked: the
+# user changes one field in the client, keeps the same secret, and the server
+# is untouched. Replace the top-level `domain`, `site` and `[[secret]]` above
+# with [[host]] blocks — the two shapes cannot be mixed.
+#
+# [[host]]
+# name = "files.example.com"
+# site = "/srv/site-files"
+#   [[host.secret]]
+#   value = "000102030405060708090a0b0c0d0e0f"
+#   label = "phone"
+#
+# [[host]]
+# name = "media.example.net"
+# site = "/srv/site-media"
+#   [[host.secret]]
+#   value = "0f0e0d0c0b0a09080706050403020100"
+#   label = "laptop"
+#
+# The same secret may appear under two names: the capability differs because
+# the host is hashed into it. With several domains the Host header decides
+# which one a request belongs to, so the front end must pass it through
+# unchanged. With a single domain any Host is accepted.
