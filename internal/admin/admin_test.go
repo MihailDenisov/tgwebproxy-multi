@@ -1,7 +1,9 @@
 package admin
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -12,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"tgwebproxy/internal/httpfront"
 	"tgwebproxy/internal/metrics"
+	"tgwebproxy/internal/secret"
 )
 
 func TestRefusesToListenBeyondLoopback(t *testing.T) {
@@ -148,5 +152,94 @@ func TestUnixPrefix(t *testing.T) {
 	}
 	if network != "unix" || address != "/run/tgwebproxy/admin.sock" {
 		t.Errorf("parseListen = %q %q", network, address)
+	}
+}
+
+
+type fakeManager struct {
+	domains []httpfront.ClientDomain
+}
+
+func (m *fakeManager) ClientSnapshot() []httpfront.ClientDomain {
+	return m.domains
+}
+
+func (m *fakeManager) ReplaceClients(domain string, entries []secret.Entry) error {
+	for i := range m.domains {
+		if m.domains[i].Domain == domain {
+			m.domains[i].Entries = entries
+			return nil
+		}
+	}
+	return errors.New("unknown domain")
+}
+
+func TestManagedClientsAPI(t *testing.T) {
+	sec, err := secret.Parse("000102030405060708090a0b0c0d0e0f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := &fakeManager{domains: []httpfront.ClientDomain{{
+		Domain: "web.example.com",
+		Entries: []secret.Entry{{
+			Secret: sec, Label: "alice", QuotaBytes: 1024,
+		}},
+	}}}
+	registry := metrics.New()
+	registry.Add("tgwp_bytes_up_total", 100, "domain", "web.example.com", "label", "alice")
+
+	server, err := NewManaged("127.0.0.1:0", registry, nil, manager, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := listen(server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go server.http.Serve(listener)
+	base := "http://" + listener.Addr().String()
+
+	resp, err := http.Get(base + "/clients")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated GET = %d, want 401", resp.StatusCode)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, base+"/clients", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []clientsPayload
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		resp.Body.Close()
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || len(got) != 1 || got[0].Clients[0].BytesUp != 100 {
+		t.Fatalf("GET clients = status %d payload %+v", resp.StatusCode, got)
+	}
+
+	body := []byte(`{"domain":"web.example.com","clients":[{"name":"bob","secret":"0f0e0d0c0b0a09080706050403020100","enabled":true,"expires_unix":2000000000,"quota_bytes":2048}]}`)
+	req, _ = http.NewRequest(http.MethodPut, base+"/clients", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT clients = %d", resp.StatusCode)
+	}
+	entries := manager.domains[0].Entries
+	if len(entries) != 1 || entries[0].Label != "bob" || entries[0].Disabled ||
+		entries[0].ExpiresUnix != 2000000000 || entries[0].QuotaBytes != 2048 {
+		t.Fatalf("manager state = %+v", entries)
 	}
 }
