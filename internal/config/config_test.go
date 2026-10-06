@@ -297,7 +297,6 @@ func TestCheckStaticMatchGuardsTheDomainSet(t *testing.T) {
 	}
 }
 
-
 func TestParseClientPolicy(t *testing.T) {
 	cfg, err := Parse([]byte(`
 domain = "proxy.example.com"
