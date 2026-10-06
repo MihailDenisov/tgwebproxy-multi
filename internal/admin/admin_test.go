@@ -242,3 +242,43 @@ func TestManagedClientsAPI(t *testing.T) {
 		t.Fatalf("manager state = %+v", entries)
 	}
 }
+
+func TestManagedClientsPolicyUpdateKeepsExistingSecret(t *testing.T) {
+	sec, err := secret.Parse("000102030405060708090a0b0c0d0e0f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := &fakeManager{domains: []httpfront.ClientDomain{{
+		Domain: "web.example.com",
+		Entries: []secret.Entry{{
+			Secret: sec, Label: "alice", QuotaBytes: 1024,
+		}},
+	}}}
+	server, err := NewManaged("127.0.0.1:0", metrics.New(), nil, manager, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := listen(server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go server.http.Serve(listener)
+
+	body := []byte(`{"domain":"web.example.com","clients":[{"name":"alice","enabled":false,"expires_unix":2000000000,"quota_bytes":4096}]}`)
+	req, _ := http.NewRequest(http.MethodPut, "http://"+listener.Addr().String()+"/clients", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT clients = %d", resp.StatusCode)
+	}
+	entry := manager.domains[0].Entries[0]
+	if !entry.Secret.Equal(sec) || !entry.Disabled || entry.ExpiresUnix != 2000000000 || entry.QuotaBytes != 4096 {
+		t.Fatalf("policy update lost secret or fields: %+v", entry)
+	}
+}
