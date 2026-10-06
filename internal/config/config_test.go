@@ -296,3 +296,30 @@ func TestCheckStaticMatchGuardsTheDomainSet(t *testing.T) {
 		t.Error("dropping a domain must need a restart")
 	}
 }
+
+
+func TestParseClientPolicy(t *testing.T) {
+	cfg, err := Parse([]byte(`
+domain = "proxy.example.com"
+[[secret]]
+value = "000102030405060708090a0b0c0d0e0f"
+label = "user@example.com"
+disabled = true
+expires_unix = 2000000000
+quota_bytes = 1073741824
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := cfg.Domains[0].Entries[0]
+	if !entry.Disabled || entry.ExpiresUnix != 2000000000 || entry.QuotaBytes != 1073741824 {
+		t.Fatalf("policy not carried through: %+v", entry)
+	}
+
+	for _, bad := range []string{"expires_unix = -1", "quota_bytes = -1"} {
+		_, err := Parse([]byte("domain = \"proxy.example.com\"\n[[secret]]\nvalue = \"000102030405060708090a0b0c0d0e0f\"\n" + bad + "\n"))
+		if err == nil {
+			t.Fatalf("negative policy value %q was accepted", bad)
+		}
+	}
+}
