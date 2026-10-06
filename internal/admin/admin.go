@@ -159,8 +159,32 @@ func managedClients(manager ClientManager, registry *metrics.Registry, token str
 					return
 				}
 				seen[name] = struct{}{}
-				sec, err := secret.Parse(client.Secret)
-				if err != nil || client.ExpiresUnix < 0 || client.QuotaBytes < 0 {
+				var sec secret.Secret
+				if client.Secret == "" {
+					for _, domain := range manager.ClientSnapshot() {
+						if domain.Domain != input.Domain {
+							continue
+						}
+						for _, existing := range domain.Entries {
+							if existing.Label == name {
+								sec = existing.Secret
+								break
+							}
+						}
+					}
+					if !sec.Valid() {
+						http.Error(w, "secret is required for a new client", http.StatusBadRequest)
+						return
+					}
+				} else {
+					var err error
+					sec, err = secret.Parse(client.Secret)
+					if err != nil {
+						http.Error(w, "invalid client secret", http.StatusBadRequest)
+						return
+					}
+				}
+				if client.ExpiresUnix < 0 || client.QuotaBytes < 0 {
 					http.Error(w, "invalid client policy", http.StatusBadRequest)
 					return
 				}
