@@ -1,0 +1,301 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Status</title>
+<style>
+body{font:15px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#f4f6f8;color:#17212b}
+main{width:min(30rem,calc(100% - 3rem));padding:1.5rem;text-align:center}
+h1{font-size:1.25rem;font-weight:600;margin:0 0 .5rem}
+#state{color:#5288c1;margin:0}
+.counters{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin:1.5rem 0 0;text-align:left}
+.counters div{padding:.85rem;border:1px solid #dce3e9;border-radius:.7rem;background:#fff}
+.counters dt{font-size:.75rem;color:#6c7883}
+.counters dd{margin:.3rem 0 0;font-size:1.05rem;font-weight:600}
+</style>
+<main>
+  <h1>Connection</h1>
+  <p id="state">Starting…</p>
+  <dl class="counters">
+    <div><dt>Sent</dt><dd id="up">0 B</dd></div>
+    <div><dt>Received</dt><dd id="down">0 B</dd></div>
+  </dl>
+</main>
+<script nonce="__NONCE__">
+(() => {
+"use strict";
+
+// Byte-for-byte forwarder; it never parses a frame. A message may carry one
+// frame or a batch of them — the client handles both — so forwarding whole
+// messages one to one is correct either way.
+
+const stateNode = document.getElementById("state");
+const upNode = document.getElementById("up");
+const downNode = document.getElementById("down");
+
+let up = 0, down = 0, upShown = -1, downShown = -1;
+const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+const human = value => {
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+  return value.toFixed(unit && value < 100 ? 1 : 0) + " " + units[unit];
+};
+setInterval(() => {
+  if (up !== upShown) { upNode.textContent = human(up); upShown = up; }
+  if (down !== downShown) { downNode.textContent = human(down); downShown = down; }
+}, 1000);
+
+// Telegram Desktop drives this page either as the top document of its hidden
+// WebView or inside an iframe in a real browser tab; only the plumbing differs.
+let carrier = null;
+const pendingToClient = [];
+
+const toClient = buffer => {
+  if (!carrier) { pendingToClient.push(buffer); return; }
+  carrier.send(buffer);
+};
+
+const flushToClient = () => {
+  while (pendingToClient.length) carrier.send(pendingToClient.shift());
+};
+
+// --- carrier to the relay: WebSocket, falling back to long polling --------
+//
+// The socket is tried first because it is cheaper. Where a WebSocket does not
+// survive the network, the same session continues over ordinary POST and GET
+// requests: the relay is the same and only the pipe differs.
+
+const endpoint = location.pathname + location.search;
+const httpBase = location.origin + endpoint;
+const sessionToken = "__SESSION__";
+
+const pendingToRelay = [];
+let relayReady = false, relaySend = null, usingHTTP = false, failed = false;
+
+const toRelay = buffer => {
+  if (!relayReady) { pendingToRelay.push(buffer); return; }
+  up += buffer.byteLength;
+  relaySend(buffer);
+};
+
+const flushToRelay = () => {
+  while (pendingToRelay.length) {
+    const buffer = pendingToRelay.shift();
+    up += buffer.byteLength;
+    relaySend(buffer);
+  }
+};
+
+const fromRelay = buffer => {
+  down += buffer.byteLength;
+  toClient(buffer);
+};
+
+const setState = (text, status) => {
+  stateNode.textContent = text;
+  if (carrier && carrier.status) carrier.status(status);
+};
+
+const fail = () => {
+  if (failed) return;
+  failed = true;
+  relayReady = false;
+  setState("Disconnected.", "failed");
+  if (carrier && carrier.close) carrier.close();
+  if (usingHTTP) {
+    fetch(httpBase, {
+      method: "DELETE",
+      headers: { "X-Tgwp-Session": sessionToken },
+      keepalive: true,
+    }).catch(() => {});
+  }
+};
+
+// Messages are length-prefixed inside one HTTP body, so a batch costs one
+// request rather than one each.
+const frameBatch = buffers => {
+  let total = 0;
+  for (const b of buffers) total += 4 + b.byteLength;
+  const out = new Uint8Array(total);
+  const view = new DataView(out.buffer);
+  let at = 0;
+  for (const b of buffers) {
+    view.setUint32(at, b.byteLength);
+    out.set(new Uint8Array(b), at + 4);
+    at += 4 + b.byteLength;
+  }
+  return out;
+};
+
+const splitBatch = buffer => {
+  const view = new DataView(buffer);
+  const out = [];
+  let at = 0;
+  while (at + 4 <= buffer.byteLength) {
+    const size = view.getUint32(at);
+    at += 4;
+    if (at + size > buffer.byteLength) break;
+    out.push(buffer.slice(at, at + size));
+    at += size;
+  }
+  return out;
+};
+
+// Uplink batches are numbered, so a request the network retries is applied
+// once: a duplicated batch would inject the same MTProto bytes twice.
+let upSeq = 0, upBusy = false;
+const upQueue = [];
+
+const queueHTTP = buffer => { upQueue.push(buffer); pumpHTTP(); };
+
+const pumpHTTP = async () => {
+  if (upBusy || !upQueue.length || failed) return;
+  upBusy = true;
+  const batch = upQueue.splice(0, upQueue.length);
+  try {
+    const response = await fetch(httpBase, {
+      method: "POST",
+      headers: {
+        "X-Tgwp-Session": sessionToken,
+        "X-Tgwp-Seq": String(upSeq),
+        "Content-Type": "application/octet-stream",
+      },
+      body: frameBatch(batch),
+      cache: "no-store",
+    });
+    if (response.status !== 204) throw new Error("uplink " + response.status);
+    upSeq++;
+  } catch (error) {
+    upBusy = false;
+    fail();
+    return;
+  }
+  upBusy = false;
+  pumpHTTP();
+};
+
+// The downlink request is held by the relay until it has something to send,
+// or until it answers empty and the page asks again.
+let cursor = 0;
+const pollHTTP = async () => {
+  while (!failed) {
+    let response;
+    try {
+      response = await fetch(httpBase, {
+        headers: { "X-Tgwp-Session": sessionToken, "X-Tgwp-Cursor": String(cursor) },
+        cache: "no-store",
+      });
+    } catch (error) { fail(); return; }
+
+    if (response.status === 204) continue;
+    if (response.status !== 200) { fail(); return; }
+
+    const body = await response.arrayBuffer();
+    cursor++;
+    for (const message of splitBatch(body)) fromRelay(message);
+  }
+};
+
+const startHTTP = () => {
+  if (usingHTTP || failed) return;
+  usingHTTP = true;
+  relayReady = true;
+  relaySend = queueHTTP;
+  setState("Connected. Keep this page open.", "connected");
+  flushToRelay();
+  pollHTTP();
+};
+
+const socket = new WebSocket(
+  (location.protocol === "https:" ? "wss://" : "ws://") + location.host + endpoint);
+socket.binaryType = "arraybuffer";
+let socketOpened = false;
+
+socket.onopen = () => {
+  socketOpened = true;
+  relayReady = true;
+  relaySend = buffer => socket.send(buffer);
+  setState("Connected. Keep this page open.", "connected");
+  flushToRelay();
+};
+socket.onmessage = event => {
+  if (event.data instanceof ArrayBuffer) fromRelay(event.data);
+};
+socket.onerror = () => { if (!socketOpened) startHTTP(); };
+socket.onclose = () => {
+  if (!socketOpened) { startHTTP(); return; }
+  if (!usingHTTP) fail();
+};
+// A socket that neither opens nor fails is the interesting case: something in
+// the path is holding it open. Do not wait for a timeout that may never come.
+setTimeout(() => { if (!socketOpened) startHTTP(); }, 4000);
+
+const startWebviewCarrier = () => {
+  const bridge = window.TelegramWebProxy;
+  if (!bridge) return false;
+
+  const hash = location.hash.slice(1);
+  const marker = "android=";
+  const at = hash.indexOf(marker);
+  if (at < 0) return false;
+  const nonce = hash.slice(at + marker.length);
+  if (!nonce) return false;
+
+  bridge.onmessage = event => {
+    if (event && event.data instanceof ArrayBuffer) toRelay(event.data);
+  };
+  carrier = {
+    send: buffer => bridge.postMessage(buffer),
+    status: state => bridge.postMessage(JSON.stringify({ t: "status", state })),
+    close: () => bridge.postMessage(JSON.stringify({ t: "close" })),
+  };
+  // tproxy-android-init handshake; the client answers with its Hello frame.
+  bridge.postMessage(JSON.stringify({ t: "tproxy-android-init", v: 1, nonce }));
+  flushToClient();
+  return true;
+};
+
+const startIframeCarrier = () => {
+  addEventListener("message", event => {
+    const data = event.data;
+    if (carrier || !data || data.t !== "tproxy-init" || data.v !== 1) return;
+    const port = event.ports && event.ports[0];
+    if (!port) return;
+    port.onmessage = portEvent => {
+      const payload = portEvent.data;
+      if (payload instanceof ArrayBuffer) { toRelay(payload); return; }
+      if (payload && payload.t === "close") socket.close();
+    };
+    port.start();
+    carrier = {
+      send: buffer => port.postMessage(buffer, [buffer]),
+      status: state => port.postMessage({ t: "status", state }),
+      close: () => port.postMessage({ t: "close" }),
+    };
+    flushToClient();
+    carrier.status(socketReady ? "connected" : "connecting");
+    // The host tab paints its own counters from these deltas.
+    setInterval(() => {
+      if (!carrier) return;
+      const deltaUp = up - reportedUp, deltaDown = down - reportedDown;
+      if (deltaUp <= 0 && deltaDown <= 0) return;
+      reportedUp = up; reportedDown = down;
+      port.postMessage({ t: "traffic", up: deltaUp, down: deltaDown });
+    }, 1000);
+  });
+  return true;
+};
+
+let reportedUp = 0, reportedDown = 0;
+
+if (window.top === window) {
+  if (!startWebviewCarrier()) {
+    // The WebView injects its bridge before navigation, so a missing bridge
+    // here means a human opened the page directly. Say nothing useful.
+    setState("Nothing to see here.", "failed");
+  }
+} else {
+  startIframeCarrier();
+  setState("Connecting…", "connecting");
+}
+})();
+</script>
