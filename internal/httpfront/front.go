@@ -412,7 +412,7 @@ func (h *Handler) serveRelay(w http.ResponseWriter, r *http.Request, state *live
 	opts.MaxStreams = state.maxStreams
 	opts.Metrics = &reporter{
 		registry: h.metrics, domain: domain.name, label: entry.Label,
-		quotaBytes: entry.QuotaBytes, stop: stopSession,
+		quotaBytes: entry.QuotaBytes, expiresUnix: entry.ExpiresUnix, stop: stopSession,
 	}
 	opts.Logger = h.log.With("peer", h.peerLabel(r), "domain", domain.name, "label", entry.Label)
 
@@ -493,9 +493,10 @@ type reporter struct {
 	registry   *metrics.Registry
 	domain     string
 	label      string
-	quotaBytes int64
-	stop       func()
-	quotaOnce  sync.Once
+	quotaBytes  int64
+	expiresUnix int64
+	stop        func()
+	quotaOnce   sync.Once
 }
 
 func (r *reporter) add(name string, delta int64) {
@@ -530,7 +531,14 @@ func (r *reporter) BytesDown(n int) {
 }
 
 func (r *reporter) enforceQuota() {
-	if r.registry == nil || r.quotaBytes <= 0 || r.stop == nil {
+	if r.stop == nil {
+		return
+	}
+	if r.expiresUnix > 0 && time.Now().Unix() >= r.expiresUnix {
+		r.quotaOnce.Do(r.stop)
+		return
+	}
+	if r.registry == nil || r.quotaBytes <= 0 {
 		return
 	}
 	labels := []string{"domain", r.domain, "label", r.label}
