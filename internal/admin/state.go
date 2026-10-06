@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"tgwebproxy/internal/httpfront"
+	"tgwebproxy/internal/metrics"
 	"tgwebproxy/internal/secret"
 )
 
@@ -14,8 +16,10 @@ import (
 // snapshot. The TOML remains the bootstrap/static configuration; management
 // changes survive process restarts without rewriting operator-owned config.
 type persistentManager struct {
-	live ClientManager
-	path string
+	live     ClientManager
+	registry *metrics.Registry
+	path     string
+	mu       sync.Mutex
 }
 
 type stateFile struct {
@@ -33,10 +37,12 @@ type stateClient struct {
 	Disabled    bool   `json:"disabled,omitempty"`
 	ExpiresUnix int64  `json:"expires_unix,omitempty"`
 	QuotaBytes  int64  `json:"quota_bytes,omitempty"`
+	BytesUp     int64  `json:"bytes_up,omitempty"`
+	BytesDown   int64  `json:"bytes_down,omitempty"`
 }
 
-func newPersistentManager(live ClientManager, path string) (*persistentManager, error) {
-	p := &persistentManager{live: live, path: path}
+func newPersistentManager(live ClientManager, registry *metrics.Registry, path string) (*persistentManager, error) {
+	p := &persistentManager{live: live, registry: registry, path: path}
 	if path == "" {
 		return p, nil
 	}
@@ -65,6 +71,13 @@ func newPersistentManager(live ClientManager, path string) (*persistentManager, 
 		}
 		if err := live.ReplaceClients(domain.Domain, entries); err != nil {
 			return nil, fmt.Errorf("admin: apply state for %q: %w", domain.Domain, err)
+		}
+		if registry != nil {
+			for _, client := range domain.Clients {
+				labels := []string{"domain", domain.Domain, "label", client.Name}
+				registry.Add("tgwp_bytes_up_total", client.BytesUp, labels...)
+				registry.Add("tgwp_bytes_down_total", client.BytesDown, labels...)
+			}
 		}
 	}
 	return p, nil
@@ -99,15 +112,27 @@ func (p *persistentManager) ReplaceClients(domain string, entries []secret.Entry
 }
 
 func (p *persistentManager) save() error {
+	if p.path == "" {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	snapshot := p.live.ClientSnapshot()
 	state := stateFile{Domains: make([]stateDomain, 0, len(snapshot))}
 	for _, domain := range snapshot {
 		out := stateDomain{Domain: domain.Domain, Clients: make([]stateClient, 0, len(domain.Entries))}
 		for _, entry := range domain.Entries {
-			out.Clients = append(out.Clients, stateClient{
+			labels := []string{"domain", domain.Domain, "label", entry.Label}
+			client := stateClient{
 				Name: entry.Label, Secret: entry.Secret.Hex(), Disabled: entry.Disabled,
 				ExpiresUnix: entry.ExpiresUnix, QuotaBytes: entry.QuotaBytes,
-			})
+			}
+			if p.registry != nil {
+				client.BytesUp = p.registry.Sum("tgwp_bytes_up_total", labels...)
+				client.BytesDown = p.registry.Sum("tgwp_bytes_down_total", labels...)
+			}
+			out.Clients = append(out.Clients, client)
 		}
 		state.Domains = append(state.Domains, out)
 	}
