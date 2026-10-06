@@ -166,7 +166,7 @@ func (h *Handler) startPollSession(state *liveState, domain *domainState, entry 
 	opts.MaxStreams = state.maxStreams
 	opts.Metrics = &reporter{
 		registry: h.metrics, domain: domain.name, label: entry.Label,
-		quotaBytes: entry.QuotaBytes, stop: stopSession,
+		quotaBytes: entry.QuotaBytes, expiresUnix: entry.ExpiresUnix, stop: stopSession,
 	}
 	opts.Logger = h.log.With("peer", peer, "domain", domain.name, "label", entry.Label, "carrier", "longpoll")
 
