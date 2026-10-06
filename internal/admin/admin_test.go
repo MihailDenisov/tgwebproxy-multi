@@ -282,3 +282,47 @@ func TestManagedClientsPolicyUpdateKeepsExistingSecret(t *testing.T) {
 		t.Fatalf("policy update lost secret or fields: %+v", entry)
 	}
 }
+
+
+func TestManagedClientStateSurvivesRestart(t *testing.T) {
+	original, err := secret.Parse("000102030405060708090a0b0c0d0e0f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(t.TempDir(), "clients.json")
+	first := &fakeManager{domains: []httpfront.ClientDomain{{
+		Domain: "web.example.com",
+		Entries: []secret.Entry{{Secret: original, Label: "alice", QuotaBytes: 1024}},
+	}}}
+	persistent, err := newPersistentManager(first, statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := []secret.Entry{{
+		Secret: original, Label: "alice", Disabled: true,
+		ExpiresUnix: 2000000000, QuotaBytes: 4096,
+	}}
+	if err := persistent.ReplaceClients("web.example.com", updated); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a fresh process whose TOML still contains the bootstrap policy.
+	second := &fakeManager{domains: []httpfront.ClientDomain{{
+		Domain: "web.example.com",
+		Entries: []secret.Entry{{Secret: original, Label: "alice", QuotaBytes: 1024}},
+	}}}
+	if _, err := newPersistentManager(second, statePath); err != nil {
+		t.Fatal(err)
+	}
+	got := second.domains[0].Entries[0]
+	if !got.Secret.Equal(original) || !got.Disabled || got.ExpiresUnix != 2000000000 || got.QuotaBytes != 4096 {
+		t.Fatalf("restored state = %+v", got)
+	}
+	info, err := os.Stat(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("state permissions = %o, want 600", info.Mode().Perm())
+	}
+}
