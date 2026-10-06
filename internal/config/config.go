@@ -36,8 +36,11 @@ type fileAdmin struct {
 }
 
 type fileEntry struct {
-	Value string `toml:"value"`
-	Label string `toml:"label"`
+	Value       string `toml:"value"`
+	Label       string `toml:"label"`
+	Disabled    bool   `toml:"disabled"`
+	ExpiresUnix int64  `toml:"expires_unix"`
+	QuotaBytes  int64  `toml:"quota_bytes"`
 }
 
 type fileHost struct {
@@ -201,7 +204,16 @@ func parseEntries(domain string, raw []fileEntry) ([]secret.Entry, error) {
 			return nil, fmt.Errorf("config: domain %q uses the label %q twice", domain, label)
 		}
 		labels[label] = struct{}{}
-		entries = append(entries, secret.Entry{Secret: parsed, Label: label})
+		if entry.ExpiresUnix < 0 {
+			return nil, fmt.Errorf("config: domain %q, secret %d: expires_unix cannot be negative", domain, i+1)
+		}
+		if entry.QuotaBytes < 0 {
+			return nil, fmt.Errorf("config: domain %q, secret %d: quota_bytes cannot be negative", domain, i+1)
+		}
+		entries = append(entries, secret.Entry{
+			Secret: parsed, Label: label, Disabled: entry.Disabled,
+			ExpiresUnix: entry.ExpiresUnix, QuotaBytes: entry.QuotaBytes,
+		})
 	}
 	return entries, nil
 }
