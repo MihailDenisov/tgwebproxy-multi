@@ -290,7 +290,7 @@ func TestManagedClientStateSurvivesRestart(t *testing.T) {
 	}
 	statePath := filepath.Join(t.TempDir(), "clients.json")
 	first := &fakeManager{domains: []httpfront.ClientDomain{{
-		Domain: "web.example.com",
+		Domain:  "web.example.com",
 		Entries: []secret.Entry{{Secret: original, Label: "alice", QuotaBytes: 1024}},
 	}}}
 	persistent, err := newPersistentManager(first, statePath)
@@ -307,7 +307,7 @@ func TestManagedClientStateSurvivesRestart(t *testing.T) {
 
 	// Simulate a fresh process whose TOML still contains the bootstrap policy.
 	second := &fakeManager{domains: []httpfront.ClientDomain{{
-		Domain: "web.example.com",
+		Domain:  "web.example.com",
 		Entries: []secret.Entry{{Secret: original, Label: "alice", QuotaBytes: 1024}},
 	}}}
 	if _, err := newPersistentManager(second, statePath); err != nil {
