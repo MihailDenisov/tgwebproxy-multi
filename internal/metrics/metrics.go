@@ -88,6 +88,41 @@ func (r *Registry) Value(name string, labels ...string) int64 {
 	return found.value.Load()
 }
 
+// Sum returns the sum of all series with the given metric name that contain
+// every requested label pair. It is useful when a metric has extra labels,
+// such as carrier, but management wants a per-client aggregate.
+func (r *Registry) Sum(name string, labels ...string) int64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var total int64
+	for _, s := range r.seen {
+		if s.name != name || !hasLabels(s.labels, labels) {
+			continue
+		}
+		total += s.value.Load()
+	}
+	return total
+}
+
+func hasLabels(all, want []string) bool {
+	if len(want)%2 != 0 {
+		return false
+	}
+	for i := 0; i+1 < len(want); i += 2 {
+		found := false
+		for j := 0; j+1 < len(all); j += 2 {
+			if all[j] == want[i] && all[j+1] == want[i+1] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 func (r *Registry) lookup(name string, labels []string) *series {
 	key := name + "\x00" + strings.Join(labels, "\x00")
 
