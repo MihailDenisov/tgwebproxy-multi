@@ -283,7 +283,6 @@ func TestManagedClientsPolicyUpdateKeepsExistingSecret(t *testing.T) {
 	}
 }
 
-
 func TestManagedClientStateSurvivesRestart(t *testing.T) {
 	original, err := secret.Parse("000102030405060708090a0b0c0d0e0f")
 	if err != nil {
