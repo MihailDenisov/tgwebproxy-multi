@@ -1,0 +1,8 @@
+/tgwebproxy
+/tgwebproxy.exe
+/probe
+/probe.exe
+*.exe
+/certs/
+relay.toml
+*.local.toml
