@@ -125,10 +125,10 @@ func managedClients(manager ClientManager, registry *metrics.Registry, token str
 					item.Clients = append(item.Clients, managedClient{
 						Name: entry.Label, Secret: entry.Secret.Hex(), Enabled: !entry.Disabled,
 						ExpiresUnix: entry.ExpiresUnix, QuotaBytes: entry.QuotaBytes,
-						BytesUp: registry.Sum("tgwp_bytes_up_total", labels...),
+						BytesUp:   registry.Sum("tgwp_bytes_up_total", labels...),
 						BytesDown: registry.Sum("tgwp_bytes_down_total", labels...),
-						Sessions: registry.Sum("tgwp_sessions_active", labels...),
-						Streams: registry.Sum("tgwp_streams_active", labels...),
+						Sessions:  registry.Sum("tgwp_sessions_active", labels...),
+						Streams:   registry.Sum("tgwp_streams_active", labels...),
 					})
 				}
 				out = append(out, item)
