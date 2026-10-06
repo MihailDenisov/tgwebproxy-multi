@@ -490,9 +490,9 @@ func (h *Handler) count(name string, delta int64, labels ...string) {
 
 // reporter binds the relay's counts to one session's domain and label.
 type reporter struct {
-	registry   *metrics.Registry
-	domain     string
-	label      string
+	registry    *metrics.Registry
+	domain      string
+	label       string
 	quotaBytes  int64
 	expiresUnix int64
 	stop        func()
