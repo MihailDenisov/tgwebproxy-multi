@@ -33,6 +33,7 @@ type file struct {
 
 type fileAdmin struct {
 	Listen string `toml:"listen"`
+	Token  string `toml:"token"`
 }
 
 type fileEntry struct {
@@ -70,6 +71,8 @@ type Config struct {
 	MaxStreams  int
 	// AdminListen serves health and metrics. Empty disables it.
 	AdminListen string
+	// AdminToken enables the private 3x-ui client management endpoints.
+	AdminToken string
 }
 
 func Load(path string) (*Config, error) {
@@ -133,6 +136,7 @@ func Parse(data []byte) (*Config, error) {
 	}
 
 	cfg.AdminListen = strings.TrimSpace(raw.Admin.Listen)
+	cfg.AdminToken = strings.TrimSpace(raw.Admin.Token)
 
 	cfg.Domains, err = parseDomains(raw)
 	if err != nil {
@@ -232,6 +236,7 @@ func (c *Config) CheckStaticMatch(next *Config) error {
 		{"plain_listen", c.PlainListen, next.PlainListen},
 		{"cert_dir", c.CertDir, next.CertDir},
 		{"admin.listen", c.AdminListen, next.AdminListen},
+		{"admin.token", c.AdminToken, next.AdminToken},
 	} {
 		if field.old != field.fresh {
 			return fmt.Errorf("config: %s cannot change without a restart (%q -> %q)",
