@@ -98,7 +98,6 @@ func TestContains(t *testing.T) {
 	}
 }
 
-
 func TestPolicyRejectsDisabledAndExpired(t *testing.T) {
 	const host = "proxy.example.com"
 	base := testEntries(t)[0]
