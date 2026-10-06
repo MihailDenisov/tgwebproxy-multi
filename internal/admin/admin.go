@@ -29,6 +29,7 @@ type Server struct {
 	http    *http.Server
 	network string
 	address string
+	flush   func() error
 }
 
 // New builds the admin server. The address is either a loopback host:port or
@@ -81,18 +82,23 @@ func NewManagedPersistent(listen string, registry *metrics.Registry, ready Ready
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		registry.WriteTo(w)
 	})
+	var flush func() error
 	if manager != nil && token != "" {
-		persistent, err := newPersistentManager(manager, stateFile)
+		persistent, err := newPersistentManager(manager, registry, stateFile)
 		if err != nil {
 			return nil, err
 		}
 		manager = persistent
+		if stateFile != "" {
+			flush = persistent.save
+		}
 		mux.HandleFunc("/clients", managedClients(manager, registry, token))
 	}
 
 	return &Server{
 		network: network,
 		address: address,
+		flush: flush,
 		http: &http.Server{
 			Addr:              address,
 			Handler:           mux,
@@ -287,14 +293,31 @@ func (s *Server) Run(ctx context.Context) error {
 			errs <- err
 		}
 	}()
-	select {
-	case <-ctx.Done():
-	case err := <-errs:
-		s.shutdown()
-		return err
+	var ticker *time.Ticker
+	var ticks <-chan time.Time
+	if s.flush != nil {
+		ticker = time.NewTicker(5 * time.Second)
+		ticks = ticker.C
+		defer ticker.Stop()
 	}
-	s.shutdown()
-	return nil
+	for {
+		select {
+		case <-ctx.Done():
+			s.shutdown()
+			if s.flush != nil {
+				return s.flush()
+			}
+			return nil
+		case err := <-errs:
+			s.shutdown()
+			return err
+		case <-ticks:
+			if err := s.flush(); err != nil {
+				s.shutdown()
+				return err
+			}
+		}
+	}
 }
 
 func (s *Server) shutdown() {
