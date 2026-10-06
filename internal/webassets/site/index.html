@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Service status</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%2322a55b'/%3E%3C/svg%3E">
+<style>
+:root{
+  color-scheme:light dark;
+  --bg:#f7f8fa;--fg:#15181c;--muted:#6a7280;--card:#fff;--line:#e5e7eb;
+  --ok:#12864a;--ok-bg:#e9f6ee;--ok-line:#cbe8d7
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0f1114;--fg:#e8eaed;--muted:#9299a3;--card:#171a1f;--line:#272b31;
+    --ok:#4ec27c;--ok-bg:#132a1d;--ok-line:#1f4230
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-text-size-adjust:100%}
+main{max-width:44rem;margin:0 auto;padding:3.5rem 1.25rem 4rem}
+h1{margin:0;font-size:1.45rem;font-weight:600;letter-spacing:-.01em}
+.sub{margin:.35rem 0 0;color:var(--muted);font-size:.95rem}
+.banner{display:flex;align-items:center;gap:.7rem;margin:1.75rem 0 2rem;
+  padding:.95rem 1.1rem;border:1px solid var(--ok-line);border-radius:.7rem;
+  background:var(--ok-bg);color:var(--ok);font-weight:600}
+.dot{flex:none;width:.55rem;height:.55rem;border-radius:50%;background:currentColor}
+h2{margin:0 0 .7rem;font-size:.8rem;font-weight:600;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted)}
+ul{list-style:none;margin:0;padding:0;border:1px solid var(--line);
+  border-radius:.7rem;background:var(--card);overflow:hidden}
+li{display:flex;align-items:center;justify-content:space-between;gap:1rem;
+  padding:.9rem 1.1rem;border-top:1px solid var(--line)}
+li:first-child{border-top:0}
+.name{font-weight:500}
+.state{display:flex;align-items:center;gap:.45rem;flex:none;
+  color:var(--ok);font-size:.9rem;white-space:nowrap}
+footer{margin:2.25rem 0 0;color:var(--muted);font-size:.85rem}
+footer a{color:inherit}
+@media (max-width:30rem){
+  main{padding:2.5rem 1rem 3rem}
+  li{flex-direction:column;align-items:flex-start;gap:.3rem}
+}
+</style>
+</head>
+<body>
+<main>
+  <h1>Service status</h1>
+  <p class="sub">Current availability of our public endpoints.</p>
+
+  <p class="banner"><span class="dot"></span>All systems operational</p>
+
+  <h2>Components</h2>
+  <ul>
+    <li><span class="name">Website</span><span class="state"><span class="dot"></span>Operational</span></li>
+    <li><span class="name">API</span><span class="state"><span class="dot"></span>Operational</span></li>
+    <li><span class="name">Object storage</span><span class="state"><span class="dot"></span>Operational</span></li>
+    <li><span class="name">Content delivery</span><span class="state"><span class="dot"></span>Operational</span></li>
+    <li><span class="name">Email delivery</span><span class="state"><span class="dot"></span>Operational</span></li>
+  </ul>
+
+  <footer>This page is updated automatically. For help with a specific request,
+  contact support and include the time and the endpoint you used.</footer>
+</main>
+</body>
+</html>
