@@ -155,7 +155,6 @@ func TestUnixPrefix(t *testing.T) {
 	}
 }
 
-
 type fakeManager struct {
 	domains []httpfront.ClientDomain
 }
