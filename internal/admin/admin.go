@@ -51,6 +51,11 @@ type ClientManager interface {
 
 // NewManaged enables the 3x-ui management API when both manager and token are set.
 func NewManaged(listen string, registry *metrics.Registry, ready ReadyFunc, manager ClientManager, token string) (*Server, error) {
+	return NewManagedPersistent(listen, registry, ready, manager, token, "")
+}
+
+// NewManagedPersistent additionally persists management changes in stateFile.
+func NewManagedPersistent(listen string, registry *metrics.Registry, ready ReadyFunc, manager ClientManager, token, stateFile string) (*Server, error) {
 	network, address, err := parseListen(listen)
 	if err != nil {
 		return nil, err
@@ -77,6 +82,11 @@ func NewManaged(listen string, registry *metrics.Registry, ready ReadyFunc, mana
 		registry.WriteTo(w)
 	})
 	if manager != nil && token != "" {
+		persistent, err := newPersistentManager(manager, stateFile)
+		if err != nil {
+			return nil, err
+		}
+		manager = persistent
 		mux.HandleFunc("/clients", managedClients(manager, registry, token))
 	}
 
