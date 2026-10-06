@@ -125,7 +125,7 @@ func run() error {
 	selfCheck(ctx, cfg, log)
 
 	if *configPath != "" {
-		go watchReloads(ctx, *configPath, cfg, handler, log)
+		go watchReloads(ctx, *configPath, cfg, handler, log, cfg.AdminListen != "" && cfg.AdminToken != "")
 	}
 
 	log.Info("relay listening",
@@ -139,6 +139,29 @@ func buildDomains(cfg *config.Config) ([]httpfront.Domain, error) {
 	out := make([]httpfront.Domain, 0, len(cfg.Domains))
 	for _, d := range cfg.Domains {
 		keyring, err := secret.NewKeyring(d.Name, d.Entries)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, httpfront.Domain{Name: d.Name, Keyring: keyring, SiteDir: d.Site})
+	}
+	return out, nil
+}
+
+func buildReloadDomains(cfg *config.Config, handler *httpfront.Handler, preserveManaged bool) ([]httpfront.Domain, error) {
+	if !preserveManaged {
+		return buildDomains(cfg)
+	}
+	current := make(map[string][]secret.Entry)
+	for _, d := range handler.ClientSnapshot() {
+		current[d.Domain] = d.Entries
+	}
+	out := make([]httpfront.Domain, 0, len(cfg.Domains))
+	for _, d := range cfg.Domains {
+		entries := d.Entries
+		if managed, ok := current[d.Name]; ok && len(managed) > 0 {
+			entries = managed
+		}
+		keyring, err := secret.NewKeyring(d.Name, entries)
 		if err != nil {
 			return nil, err
 		}
@@ -294,7 +317,7 @@ func resolveConfig(path string, flags flagValues) (*config.Config, error) {
 
 // watchReloads applies SIGHUP. A rejected reload keeps the running
 // configuration: reloading must never be a way to take the relay down.
-func watchReloads(ctx context.Context, path string, current *config.Config, handler *httpfront.Handler, log *slog.Logger) {
+func watchReloads(ctx context.Context, path string, current *config.Config, handler *httpfront.Handler, log *slog.Logger, preserveManaged bool) {
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
@@ -313,7 +336,7 @@ func watchReloads(ctx context.Context, path string, current *config.Config, hand
 				log.Error("reload refused", "error", err)
 				continue
 			}
-			domains, err := buildDomains(next)
+			domains, err := buildReloadDomains(next, handler, preserveManaged)
 			if err != nil {
 				log.Error("reload refused", "error", err)
 				continue
