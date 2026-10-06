@@ -240,8 +240,11 @@ replaces that domain's client list with `name`, `secret`, `enabled`,
 their live sessions. `GET /clients` returns the active policy plus per-client
 upload/download and live session/stream counters. When `state_file` is set, API-managed client policy is atomically persisted
 and restored over the TOML bootstrap configuration after a process restart.
-The state file contains client secrets and is written with mode `0600`; place
-it on a durable private volume. The endpoint is never registered on the public
+The state file contains client secrets and accumulated upload/download usage and is
+written with mode `0600`; place it on a durable private volume. Usage is
+checkpointed every 5 seconds and flushed on graceful shutdown, so quotas survive
+normal service restarts; an abrupt host/process crash can lose at most the most
+recent checkpoint interval. The endpoint is never registered on the public
 listener.
 
 The listener must be private — a loopback `host:port`, or a filesystem path
