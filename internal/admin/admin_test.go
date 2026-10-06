@@ -293,7 +293,10 @@ func TestManagedClientStateSurvivesRestart(t *testing.T) {
 		Domain:  "web.example.com",
 		Entries: []secret.Entry{{Secret: original, Label: "alice", QuotaBytes: 1024}},
 	}}}
-	persistent, err := newPersistentManager(first, statePath)
+	firstMetrics := metrics.New()
+	firstMetrics.Add("tgwp_bytes_up_total", 700, "domain", "web.example.com", "label", "alice")
+	firstMetrics.Add("tgwp_bytes_down_total", 300, "domain", "web.example.com", "label", "alice")
+	persistent, err := newPersistentManager(first, firstMetrics, statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,10 +313,15 @@ func TestManagedClientStateSurvivesRestart(t *testing.T) {
 		Domain:  "web.example.com",
 		Entries: []secret.Entry{{Secret: original, Label: "alice", QuotaBytes: 1024}},
 	}}}
-	if _, err := newPersistentManager(second, statePath); err != nil {
+	secondMetrics := metrics.New()
+	if _, err := newPersistentManager(second, secondMetrics, statePath); err != nil {
 		t.Fatal(err)
 	}
 	got := second.domains[0].Entries[0]
+	if used := secondMetrics.Sum("tgwp_bytes_up_total", "domain", "web.example.com", "label", "alice") +
+		secondMetrics.Sum("tgwp_bytes_down_total", "domain", "web.example.com", "label", "alice"); used != 1000 {
+		t.Fatalf("restored usage = %d, want 1000", used)
+	}
 	if !got.Secret.Equal(original) || !got.Disabled || got.ExpiresUnix != 2000000000 || got.QuotaBytes != 4096 {
 		t.Fatalf("restored state = %+v", got)
 	}
