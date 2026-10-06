@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -333,7 +334,21 @@ func (h *Handler) match(domain *domainState, r *http.Request) (secret.Entry, boo
 	if r.Method != http.MethodGet || r.URL.Path != "/" {
 		return secret.Entry{}, false
 	}
-	return domain.keyring.Match(r.URL.Query().Get("bridge"))
+	entry, ok := domain.keyring.Match(r.URL.Query().Get("bridge"))
+	if !ok || h.quotaExceeded(domain.name, entry) {
+		return secret.Entry{}, false
+	}
+	return entry, true
+}
+
+func (h *Handler) quotaExceeded(domain string, entry secret.Entry) bool {
+	if entry.QuotaBytes <= 0 || h.metrics == nil {
+		return false
+	}
+	labels := []string{"domain", domain, "label", entry.Label}
+	used := h.metrics.Value("tgwp_bytes_up_total", labels...) +
+		h.metrics.Value("tgwp_bytes_down_total", labels...)
+	return used >= entry.QuotaBytes
 }
 
 func (h *Handler) serveBridge(w http.ResponseWriter, r *http.Request, state *liveState, domain *domainState, entry secret.Entry) {
@@ -381,10 +396,11 @@ func (h *Handler) serveRelay(w http.ResponseWriter, r *http.Request, state *live
 	defer cancel()
 	// Closing the socket is not optional: the session's reader blocks in
 	// ReadMessage, and cancelling the context alone would never wake it.
-	id := h.sessions.add(domain.name, entry, func() {
+	stopSession := func() {
 		cancel()
 		_ = conn.Close()
-	})
+	}
+	id := h.sessions.add(domain.name, entry, stopSession)
 	defer h.sessions.remove(id)
 
 	h.count("tgwp_sessions_started_total", 1, "domain", domain.name, "label", entry.Label)
@@ -394,7 +410,10 @@ func (h *Handler) serveRelay(w http.ResponseWriter, r *http.Request, state *live
 	opts := h.relay
 	opts.Secret = entry.Secret
 	opts.MaxStreams = state.maxStreams
-	opts.Metrics = &reporter{registry: h.metrics, domain: domain.name, label: entry.Label}
+	opts.Metrics = &reporter{
+		registry: h.metrics, domain: domain.name, label: entry.Label,
+		quotaBytes: entry.QuotaBytes, stop: stopSession,
+	}
 	opts.Logger = h.log.With("peer", h.peerLabel(r), "domain", domain.name, "label", entry.Label)
 
 	if err := relay.Serve(ctx, &wsConn{conn: conn}, opts); err != nil {
@@ -471,9 +490,12 @@ func (h *Handler) count(name string, delta int64, labels ...string) {
 
 // reporter binds the relay's counts to one session's domain and label.
 type reporter struct {
-	registry *metrics.Registry
-	domain   string
-	label    string
+	registry   *metrics.Registry
+	domain     string
+	label      string
+	quotaBytes int64
+	stop       func()
+	quotaOnce  sync.Once
 }
 
 func (r *reporter) add(name string, delta int64) {
@@ -498,5 +520,23 @@ func (r *reporter) MessageWritten(alsoQueued int) {
 }
 func (r *reporter) UpstreamDialFailed() { r.add("tgwp_upstream_dial_failures_total", 1) }
 func (r *reporter) ProtocolError()      { r.add("tgwp_protocol_errors_total", 1) }
-func (r *reporter) BytesUp(n int)       { r.add("tgwp_bytes_up_total", int64(n)) }
-func (r *reporter) BytesDown(n int)     { r.add("tgwp_bytes_down_total", int64(n)) }
+func (r *reporter) BytesUp(n int) {
+	r.add("tgwp_bytes_up_total", int64(n))
+	r.enforceQuota()
+}
+func (r *reporter) BytesDown(n int) {
+	r.add("tgwp_bytes_down_total", int64(n))
+	r.enforceQuota()
+}
+
+func (r *reporter) enforceQuota() {
+	if r.registry == nil || r.quotaBytes <= 0 || r.stop == nil {
+		return
+	}
+	labels := []string{"domain", r.domain, "label", r.label}
+	used := r.registry.Value("tgwp_bytes_up_total", labels...) +
+		r.registry.Value("tgwp_bytes_down_total", labels...)
+	if used >= r.quotaBytes {
+		r.quotaOnce.Do(r.stop)
+	}
+}
