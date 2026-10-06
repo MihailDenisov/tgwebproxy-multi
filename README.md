@@ -205,6 +205,7 @@ the previous result; a gap is refused outright.
 [admin]
 listen = "127.0.0.1:9600"
 # token = "strong-random-token" # enables the private 3x-ui client API
+# state_file = "/var/lib/tgwebproxy/clients.json" # persists API-managed clients
 ```
 
 `/healthz` says the process is alive, `/readyz` opens and drops a TCP
@@ -237,8 +238,11 @@ Authorization: Bearer <token>
 replaces that domain's client list with `name`, `secret`, `enabled`,
 `expires_unix` and `quota_bytes`. Removed, disabled or expired clients lose
 their live sessions. `GET /clients` returns the active policy plus per-client
-upload/download and live session/stream counters. The endpoint is never
-registered on the public listener.
+upload/download and live session/stream counters. When `state_file` is set, API-managed client policy is atomically persisted
+and restored over the TOML bootstrap configuration after a process restart.
+The state file contains client secrets and is written with mode `0600`; place
+it on a durable private volume. The endpoint is never registered on the public
+listener.
 
 The listener must be private — a loopback `host:port`, or a filesystem path
 taken as a Unix socket. Anything routable is refused at start-up, and a test
