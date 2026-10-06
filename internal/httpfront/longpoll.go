@@ -158,18 +158,22 @@ func (h *Handler) startPollSession(state *liveState, domain *domainState, entry 
 		return "", err
 	}
 
+	stopSession := func() {
+		h.polls.Remove(session.Token())
+	}
 	opts := h.relay
 	opts.Secret = entry.Secret
 	opts.MaxStreams = state.maxStreams
-	opts.Metrics = &reporter{registry: h.metrics, domain: domain.name, label: entry.Label}
+	opts.Metrics = &reporter{
+		registry: h.metrics, domain: domain.name, label: entry.Label,
+		quotaBytes: entry.QuotaBytes, stop: stopSession,
+	}
 	opts.Logger = h.log.With("peer", peer, "domain", domain.name, "label", entry.Label, "carrier", "longpoll")
 
 	h.count("tgwp_sessions_started_total", 1, "domain", domain.name, "label", entry.Label, "carrier", "longpoll")
 	h.count("tgwp_sessions_active", 1, "domain", domain.name, "label", entry.Label, "carrier", "longpoll")
 
-	id := h.sessions.add(domain.name, entry, func() {
-		h.polls.Remove(session.Token())
-	})
+	id := h.sessions.add(domain.name, entry, stopSession)
 
 	go func() {
 		defer h.sessions.remove(id)
